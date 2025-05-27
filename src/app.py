@@ -7,7 +7,8 @@ import sys
 import logging
 from datetime import datetime
 from PIL import Image, ImageTk
-
+if os.environ.get('DISPLAY','') == '':
+    os.environ.__setitem__('DISPLAY', ':0.0')
 # Configure logging
 logging.basicConfig(filename='insurance_app.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
