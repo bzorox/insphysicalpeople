@@ -159,7 +159,7 @@ class InsuranceApp:
         logo_frame = ttk.Frame(self.root)
         logo_frame.pack(pady=5)
         try:
-            logo_path = resource_path("assets/app_logo.png")
+            logo_path = resource_path("app_logo.png")
             img = Image.open(logo_path).resize((150, 150), Image.Resampling.LANCZOS)
             self.logo_img = ImageTk.PhotoImage(img)
             ttk.Label(logo_frame, image=self.logo_img).pack()
@@ -213,7 +213,7 @@ class InsuranceApp:
     def _set_icon(self):
         """Set application icon"""
         try:
-            icon_path = resource_path("assets/app_icon.ico")
+            icon_path = resource_path("app_icon.ico")
             self.root.iconbitmap(icon_path)
         except Exception as e:
             logging.error(f"Failed to set icon: {e}")
