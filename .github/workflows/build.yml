@@ -19,11 +19,11 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     
-    - name: Install Wine
+    - name: Install Wine and Xvfb
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y wine wine32
+        sudo apt-get install -y wine wine32 xvfb
         wine --version
     
     - name: Install dependencies
@@ -37,10 +37,15 @@ jobs:
         cd src
         python -c "from app import InsuranceApp; import tkinter; print('Imports successful')"
     
+    - name: Check resource files
+      run: |
+        cd src
+        ls -la app_logo.png app_icon.ico || echo "Resource files missing"
+    
     - name: Build executable with PyInstaller
       run: |
         cd src
-        wine pyinstaller --noconfirm --onefile --windowed --icon=app_icon.ico --add-data="app_logo.png;." --name=InsuranceApp app.py
+        xvfb-run --auto-servernum wine pyinstaller --noconfirm --onefile --windowed --icon=app_icon.ico --add-data="app_logo.png;." --name=InsuranceApp --noupx app.py
     
     - name: Upload executable as artifact
       uses: actions/upload-artifact@v4
