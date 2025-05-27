@@ -27,6 +27,13 @@ PATTERN = r"""
 """
 REGEX = re.compile(PATTERN, flags=re.IGNORECASE | re.VERBOSE)
 
+def clean_text(text):
+    """Очистка полей object от ФИО"""
+    text = str(text)
+    text = re.sub(r"\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]\b|\b[А-ЯЁ][а-яё]+-\b|\b[А-ЯЁ][а-яё]+s\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s\b", '', text)
+    text = re.sub(r",\d{2}-\d{2}-\d{2},", '', text)
+    return text.strip()
+
 class InsuranceApp:
     def __init__(self, root):
         self.root = root
@@ -39,7 +46,7 @@ class InsuranceApp:
         self.status = tk.StringVar(value="Готов к работе")
         
         self._setup_ui()
-        logging.info("Application initialized")
+        logging.info("Приложение инициализируется")
 
     def _setup_ui(self):
         """Setup UI components"""
@@ -111,13 +118,6 @@ class InsuranceApp:
             self.output_folder.set(folder_path)
             logging.info(f"Selected output folder: {folder_path}")
 
-    def clean_text(self, text):
-        """Clean text by removing specific patterns"""
-        text = str(text)
-        text = re.sub(r"\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]\b|\b[А-ЯЁ][а-яё]+-\b|\b[А-ЯЁ][а-яё]+s\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s\b", '', text)
-        text = re.sub(r",\d{2}-\d{2}-\d{2},", '', text)
-        return text.strip()
-
     def process_data(self):
         """Process Excel data and save results"""
         input_file = self.input_file.get()
@@ -141,7 +141,7 @@ class InsuranceApp:
 
             self.status.set("Очистка текста...")
             self.progress.set(30)
-            df['object'] = df['object'].apply(self.clean_text)
+            df['object'] = df['object'].apply(clean_text)
 
             self.status.set("Фильтрация данных...")
             self.progress.set(50)
