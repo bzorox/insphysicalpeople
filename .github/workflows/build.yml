@@ -10,10 +10,12 @@ jobs:
         python-version: ["3.10"]
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     
@@ -41,7 +43,8 @@ jobs:
         wine pyinstaller --noconfirm --onefile --windowed --icon=app_icon.ico --add-data="app_logo.png;." --name=InsuranceApp app.py
     
     - name: Upload executable as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: InsPhysical
-        path: src/dist/InsPhysicalApp.exe
+        name: InsuranceApp
+        path: src/dist/InsuranceApp.exe
+        retention-days: 30
