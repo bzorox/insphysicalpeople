@@ -25,28 +25,9 @@ jobs:
     - name: Verify imports
       run: |
         cd src
-        python -c "from app import InsuranceApp; import pandas as pd; print('Все импорты работают')"
+        python -c "from app import InsuranceApp; import tkinter; print('Imports successful')"
         
-    - name: Run headless test
+    - name: Run basic functionality test
       run: |
         cd src
-        python -c "
-import sys
-import os
-os.environ['DISPLAY'] = ':99.0'  # Для headless режима
-
-# Проверка основных функций без создания GUI
-from app import InsuranceApp, REGEX, clean_text
-
-# Тест функции clean_text
-assert clean_text('Тест,01-01-01,текст') == 'Тест текст'
-assert clean_text('Иванов Иван Иванович текст') == 'текст'
-
-# Тест регулярного выражения
-assert REGEX.search('гражданской ответственности') is not None
-assert REGEX.search('страхование гражданской ответсвенности') is not None
-assert REGEX.search('обычный текст') is None
-
-print('Все тесты пройдены успешно!')
-sys.exit(0)
-"
+        python -c "import sys; from app import run_tests; run_tests()"
