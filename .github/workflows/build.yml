@@ -21,25 +21,32 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r src/requirements.txt
-        pip install pytest
         
     - name: Verify imports
       run: |
         cd src
-        python -c "from app import InsuranceApp; import tkinter; print('Imports successful')"
+        python -c "from app import InsuranceApp; import pandas as pd; print('Все импорты работают')"
         
-    - name: Run basic functionality test
+    - name: Run headless test
       run: |
         cd src
         python -c "
 import sys
-from app import InsuranceApp
-import tkinter as tk
+import os
+os.environ['DISPLAY'] = ':99.0'  # Для headless режима
 
-root = tk.Tk()
-root.withdraw()  # Hide the main window
-app = InsuranceApp(root)
-print('Приложение работает')
-root.destroy()
+# Проверка основных функций без создания GUI
+from app import InsuranceApp, REGEX, clean_text
+
+# Тест функции clean_text
+assert clean_text('Тест,01-01-01,текст') == 'Тест текст'
+assert clean_text('Иванов Иван Иванович текст') == 'текст'
+
+# Тест регулярного выражения
+assert REGEX.search('гражданской ответственности') is not None
+assert REGEX.search('страхование гражданской ответсвенности') is not None
+assert REGEX.search('обычный текст') is None
+
+print('Все тесты пройдены успешно!')
 sys.exit(0)
 "
