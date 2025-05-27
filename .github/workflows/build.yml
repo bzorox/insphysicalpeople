@@ -17,12 +17,31 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     
+    - name: Install Wine
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y wine wine32
+        wine --version
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r src/requirements.txt
-        
+        pip install pyinstaller
+    
     - name: Verify imports
       run: |
         cd src
         python -c "from app import InsuranceApp; import tkinter; print('Imports successful')"
+    
+    - name: Build executable with PyInstaller
+      run: |
+        cd src
+        wine pyinstaller --noconfirm --onefile --windowed --icon=app_icon.ico --add-data="app_logo.png;." --name=InsuranceApp app.py
+    
+    - name: Upload executable as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: InsPhysical
+        path: src/dist/InsPhysicalApp.exe
