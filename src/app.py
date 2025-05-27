@@ -7,8 +7,7 @@ import sys
 import logging
 from datetime import datetime
 from PIL import Image, ImageTk
-if os.environ.get('DISPLAY','') == '':
-    os.environ.__setitem__('DISPLAY', ':0.0')
+
 # Configure logging
 logging.basicConfig(filename='insurance_app.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
@@ -175,11 +174,27 @@ class InsuranceApp:
             self.status.set("Ошибка")
             self.progress.set(0)
             logging.error(f"Processing error: {e}")
-          
+
+def run_tests():
+    """Функция для тестирования основных компонентов без GUI"""
+    test_text = 'Тест,01-01-01,текст'
+    assert clean_text(test_text) == 'Тест текст'
+    
+    test_name = 'Иванов Иван Иванович текст'
+    assert clean_text(test_name) == 'текст'
+    
+    assert REGEX.search('гражданской ответственности') is not None
+    assert REGEX.search('страхование гражданской ответсвенности') is not None
+    assert REGEX.search('обычный текст') is None
+    
+    print("Все тесты пройдены успешно!")
+    return True
+
 if __name__ == "__main__":
     if "--test" in sys.argv:
-        print("Application test passed!")
-        sys.exit(0)    
+        run_tests()
+        sys.exit(0)
+        
     root = tk.Tk()
     app = InsuranceApp(root)
     root.mainloop()
