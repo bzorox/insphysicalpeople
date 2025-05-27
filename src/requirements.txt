@@ -1,4 +1,7 @@
-pandas>=2.0.0 
-openpyxl>=3.0.0 
-pillow>=9.0.0 
+pandas>=2.0.0
+openpyxl>=3.0.0
+pillow>=9.0.0
 pyinstaller>=5.0.0
+folium>=0.14.0
+webbrowser>=0.2.1
+geopy>=2.3.0
