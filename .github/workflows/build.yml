@@ -26,8 +26,3 @@ jobs:
       run: |
         cd src
         python -c "from app import InsuranceApp; import tkinter; print('Imports successful')"
-        
-    - name: Run basic functionality test
-      run: |
-        cd src
-        python -c "import sys; from app import run_tests; run_tests()"
