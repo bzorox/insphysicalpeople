@@ -72,7 +72,7 @@ def geocode_addresses(address_series, progress_callback=None):
     
     for i, address in enumerate(address_series, 1):
         try:
-            location = geocode(address + ', Россия', timeout=10)
+            location = geocode(address, timeout=10)
             if location:
                 results.append((location.latitude, location.longitude))
             else:
