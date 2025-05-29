@@ -29,10 +29,6 @@ jobs:
       run: |
         python -c "from app import InsuranceApp; import tkinter; from geopy.geocoders import Nominatim; print('Imports successful')"
     
-    - name: Check resource files
-      run: |
-        dir assets\app_logo.png assets\app_icon.ico || echo "Resource files missing"
-    
     - name: Build executable with PyInstaller
       run: |
         pyinstaller --noconfirm --onefile --windowed --icon=assets/app_icon.ico --add-data="assets/app_logo.png;assets" --name=InsuranceApp --noupx app.py
