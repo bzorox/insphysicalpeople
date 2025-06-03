@@ -20,6 +20,11 @@ import time
 logging.basicConfig(filename='insurance_app.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Constants for thresholds
+THRESHOLD_100M = 100_000_000  # 100 million RUB
+THRESHOLD_500M = 500_000_000  # 500 million RUB
+THRESHOLD_2B = 2_000_000_000  # 2 billion RUB
+
 def resource_path(relative_path):
     """Get absolute path to resource for PyInstaller and development"""
     base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
@@ -47,7 +52,7 @@ def clean_text(text):
     """Очистка полей object от ФИО"""
     text = str(text)
     text = re.sub(r"\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]\b|\b[А-ЯЁ][а-яё]+-\b|\b[А-ЯЁ][а-яё]+s\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s\b", '', text)
-    text = re.sub(r",\d{2}-\d{2}-\d{2},", '', text)
+    text = re.sub(r",\d{2}-\d{2}-\д{2},", '', text)
     return text.strip()
 
 def clean_address(address):
@@ -107,10 +112,12 @@ def create_map(dataframe, output_folder):
         
         # Определяем цвет маркера в зависимости от суммы
         def get_color(total):
-            if total < 10000:
+            if total < 100_000_000:
                 return 'green'
-            elif 10000 <= total < 50000:
+            elif 100_000_000 <= total < 500_000_000:
                 return 'orange'
+            elif 500_000_000 <= total < 2_000_000_000:
+                return 'yellow'
             else:
                 return 'red'
         
@@ -118,8 +125,8 @@ def create_map(dataframe, output_folder):
         for _, row in df_with_coords.iterrows():
             folium.Marker(
                 location=[row['lat'], row['lon']],
-                popup=f"Адрес: {row['adress']}<br>Сумма: {row['total_money']:,.2f} руб.",
-                icon=folium.Icon(color=get_color(row['total_money']))
+                popup=f"Адрес: {row['address']}<br>Сумма: {row['total_premium']:,.2f} руб.",
+                icon=folium.Icon(color=get_color(row['total_premium']))
             ).add_to(marker_cluster)
         
         # Сохраняем карту в HTML файл
@@ -191,7 +198,7 @@ class InsuranceApp:
         self.geocode_check.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
 
         # Progress bar
-        ttk.Label(main_frame, text="Прогресс:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Прогресс:").grid(rowmetal=4, column=0, sticky=tk.W, pady=5)
         ttk.Progressbar(main_frame, variable=self.progress, maximum=100, length=400).grid(row=4, column=1, columnspan=2, padx=5, pady=5)
 
         # Status
@@ -213,7 +220,7 @@ class InsuranceApp:
     def _set_icon(self):
         """Set application icon"""
         try:
-            icon_path = resource_path("/assets/app_icon.ico")
+            icon_path = resource_path("assets/app_icon.ico")
             self.root.iconbitmap(icon_path)
         except Exception as e:
             logging.error(f"Failed to set icon: {e}")
@@ -266,11 +273,12 @@ class InsuranceApp:
 
             self.status.set("Очистка адресов...")
             self.progress.set(30)
-            df['clean_adress'] = df['adress'].apply(clean_address)
+            df['clean_address'] = df['address'].apply(clean_address)
 
             self.status.set("Фильтрация данных...")
             self.progress.set(40)
-            df_filtered = df[~df['object'].str.lower().str.strip().apply(lambda x: bool(REGEX.search(x)) if pd.notna(x) else False)]
+            # df_filtered = df[~df['object'].str.lower().str.strip().apply(lambda x: bool(REGEX.search(x)) if pd.notna(x) else False)]
+            df_filtered = df  # Пропускаем фильтрацию по гражданской ответственности
 
             df_filtered['date_end'] = pd.to_datetime(df_filtered['date_end'], dayfirst=True, errors='coerce')
             filter_date = pd.to_datetime(datetime.now().date())
@@ -278,23 +286,28 @@ class InsuranceApp:
 
             self.status.set("Подсчет сумм...")
             self.progress.set(60)
-            adress_sums = df_filtered.groupby('clean_adress')['money'].sum().reset_index(name='total_money')
-            adress_sums = adress_sums.rename(columns={'clean_adress': 'adress'})
+            address_sums = df_filtered.groupby('clean_address')['money'].sum().reset_index(name='total_premium')
+            address_sums = address_sums.rename(columns={'clean_address': 'address'})
+
+            # Разделение данных по пороговым суммам
+            sums_above_100M = address_sums[address_sums['total_premium'] > THRESHOLD_100M]
+            sums_above_500M = address_sums[address_sums['total_premium'] > THRESHOLD_500M]
+            sums_above_2B = address_sums[address_sums['total_premium'] > THRESHOLD_2B]
 
             # Геокодирование адресов, если нужно
             if self.create_map_var.get() and self.geocode_var.get():
                 self.status.set("Геокодирование адресов... (это может занять время)")
                 self.root.update_idletasks()
                 
-                unique_addresses = adress_sums['adress'].unique()
+                unique_addresses = address_sums['address'].unique()
                 coordinates = geocode_addresses(unique_addresses, self.update_progress)
                 
                 # Создаем словарь адрес -> координаты
                 address_coords = {addr: coords for addr, coords in zip(unique_addresses, coordinates)}
                 
                 # Добавляем координаты в DataFrame
-                adress_sums['lat'] = adress_sums['adress'].map(lambda x: address_coords.get(x, (None, None))[0])
-                adress_sums['lon'] = adress_sums['adress'].map(lambda x: address_coords.get(x, (None, None))[1])
+                address_sums['lat'] = address_sums['address'].map(lambda x: address_coords.get(x, (None, None))[0])
+                address_sums['lon'] = address_sums['address'].map(lambda x: address_coords.get(x, (None, None))[1])
 
             self.status.set("Сохранение результатов...")
             self.progress.set(90)
@@ -303,19 +316,22 @@ class InsuranceApp:
             
             with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
                 df_filtered.to_excel(writer, sheet_name='filtered_data', index=False)
-                adress_sums.to_excel(writer, sheet_name='adress_totals', index=False)
+                address_sums.to_excel(writer, sheet_name='address_totals', index=False)
+                sums_above_100M.to_excel(writer, sheet_name='totals_above_100M', index=False)
+                sums_above_500M.to_excel(writer, sheet_name='totals_above_500M', index=False)
+                sums_above_2B.to_excel(writer, sheet_name='totals_above_2B', index=False)
             
             # Создание карты, если выбрано
             if self.create_map_var.get():
                 self.status.set("Создание карты...")
-                map_file = create_map(adress_sums, output_folder)
+                map_file = create_map(address_sums, output_folder)
                 if map_file:
                     webbrowser.open(f"file://{map_file}")
             
             self.progress.set(100)
             self.status.set("Готово!")
             messagebox.showinfo("Успешно", f"Результаты сохранены в:\n{output_folder}")
-            logging.info(f"Results saved to {output_folder}")
+            logging.info(f"Results saved to {output_file}")
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{str(e)}")
