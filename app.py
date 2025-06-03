@@ -1,432 +1,360 @@
-import os
-import sys
 import pandas as pd
 import re
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import os
+import sys
+import logging
 from datetime import datetime
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, 
-                            QPushButton, QFileDialog, QProgressBar, QMessageBox, 
-                            QHBoxLayout, QFrame, QSizePolicy, QCheckBox)
-from PyQt5.QtCore import Qt, QFile, QTextStream, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal
-from PyQt5.QtGui import QIcon, QPixmap, QFont
+from PIL import Image, ImageTk
+import webbrowser
 import folium
+from folium.plugins import MarkerCluster
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 import time
 
-class GeocoderThread(QThread):
-    progress_signal = pyqtSignal(int)
-    finished_signal = pyqtSignal(list)
+# Configure logging
+logging.basicConfig(filename='insurance_app.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-    def __init__(self, addresses):
-        super().__init__()
-        self.addresses = addresses
+# Constants for thresholds
+THRESHOLD_100M = 100_000_000  # 100 million RUB
+THRESHOLD_500M = 500_000_000  # 500 million RUB
+THRESHOLD_2B = 2_000_000_000  # 2 billion RUB
 
-    def run(self):
-        geolocator = Nominatim(user_agent="insurance_app")
-        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1, max_retries=2)
-        
-        results = []
-        total = len(self.addresses)
-        
-        for i, address in enumerate(self.addresses, 1):
-            try:
-                location = geocode(address, timeout=10)
-                if location:
-                    results.append((location.latitude, location.longitude))
-                else:
-                    results.append((None, None))
-            except (GeocoderTimedOut, GeocoderUnavailable) as e:
+def resource_path(relative_path):
+    """Get absolute path to resource for PyInstaller and development"""
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
+
+# Compile regex patterns once at module level
+PATTERN = r"""
+    \b(?:[гГ][рР]?[аА]?[жЖ]?[дД]?[аА]?[нН]?[сС]?[кК]?[аАяЯ]?[яЯ]?\s*)?
+    (?:ответ[сстССТ]?[тТ]?[вВ]?[еЕ]?[нН]?[нН]?[оО]?[сС]?[тТ]?[ьЬ]?|ГО|г\.о\.)\b
+    |\b(?:страхование\s*)?(?:гражданской|гр[ао]жданской|гржданской)\s*(?:ответственности|ответсвенности|ответсвенноти|ответственноти)\b
+    |\b(?:ответственность|ответсвенность|ответсвенноть|ответственноть)\b
+    |\bГО\b|\bг\.о\.\b
+"""
+REGEX = re.compile(PATTERN, flags=re.IGNORECASE | re.VERBOSE)
+
+ADDRESS_CLEANING_PATTERN = r"""
+    (?:,\s*|\s+)(?:кв\.?\s*\d+[а-яА-Я]?\b|квартира\s*\d+[а-яА-Я]?\b|кв\.?\s*№\s*\d+[а-яА-Я]?\b|
+    квартира\s*№\s*\d+[а-яА-Я]?\b|оф\s*\d+[а-яА-Я]?\b|оф\.\s*\d+[а-яА-Я]?\b|офис\s*\d+[а-яА-Я]?\b|
+    офис\s*№\s*\d+[а-яА-Я]?\b|оф\.\s*№\s*\d+[а-яА-Я]?\b|оф\s*№\s*\d+[а-яА-Я]?\b|
+    пом\.\s*\d+[а-яА-Я-]?\b|помещ\.\s*\d+[а-яА-Я-]?\b|помещение\s*\d+[а-яА-Я]?\b)
+"""
+ADDRESS_REGEX = re.compile(ADDRESS_CLEANING_PATTERN, flags=re.IGNORECASE | re.VERBOSE)
+
+def clean_text(text):
+    """Очистка полей object от ФИО"""
+    text = str(text)
+    text = re.sub(r"\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]\b|\b[А-ЯЁ][а-яё]+-\b|\b[А-ЯЁ][а-яё]+s\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s\b", '', text)
+    text = re.sub(r",\d{2}-\d{2}-\d{2},", '', text)
+    return text.strip()
+
+def clean_address(address):
+    """Очистка адресов от номеров квартир, офисов и помещений"""
+    if pd.isna(address):
+        return address
+    address = str(address)
+    # Удаляем указания на квартиры, офисы и помещения
+    address = ADDRESS_REGEX.sub('', address)
+    # Удаляем возможные двойные запятые и пробелы
+    address = re.sub(r',\s*,', ',', address)
+    address = re.sub(r'\s{2,}', ' ', address)
+    return address.strip(' ,')
+
+def geocode_addresses(address_series, progress_callback=None):
+    """Геокодирование адресов с помощью Nominatim"""
+    geolocator = Nominatim(user_agent="insurance_app")
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1, max_retries=2)
+    
+    results = []
+    total = len(address_series)
+    
+    for i, address in enumerate(address_series, 1):
+        try:
+            location = geocode(address, timeout=10)
+            if location:
+                results.append((location.latitude, location.longitude))
+            else:
                 results.append((None, None))
-                time.sleep(2)
-            
+        except (GeocoderTimedOut, GeocoderUnavailable) as e:
+            logging.warning(f"Geocoding error for {address}: {str(e)}")
+            results.append((None, None))
+            time.sleep(2)  # Подождать перед следующей попыткой
+        
+        if progress_callback:
             progress = int((i / total) * 100)
-            self.progress_signal.emit(progress)
-        
-        self.finished_signal.emit(results)
+            progress_callback(progress)
+    
+    return results
 
-class StyledButton(QPushButton):
-    def __init__(self, text):
-        super().__init__(text)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setObjectName("styledButton")
-        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        self._original_width = self.sizeHint().width()
-
-    def enterEvent(self, event):
-        animation = QPropertyAnimation(self, b"minimumWidth")
-        animation.setDuration(150)
-        animation.setStartValue(self.width())
-        animation.setEndValue(self._original_width + 10)
-        animation.setEasingCurve(QEasingCurve.OutQuad)
-        animation.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        animation = QPropertyAnimation(self, b"minimumWidth")
-        animation.setDuration(150)
-        animation.setStartValue(self.width())
-        animation.setEndValue(self._original_width)
-        animation.setEasingCurve(QEasingCurve.OutQuad)
-        animation.start()
-        super().leaveEvent(event)
-
-class InsuranceDataProcessor(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Обработка страховых данных")
-        self.setMinimumSize(800, 700)
+def create_map(dataframe, output_folder):
+    """Создание интерактивной карты с точками адресов"""
+    try:
+        # Фильтруем адреса с координатами
+        df_with_coords = dataframe.dropna(subset=['lat', 'lon'])
         
-        if hasattr(sys, '_MEIPASS'):
-            self.setWindowIcon(QIcon(os.path.join(sys._MEIPASS, 'assets', 'logo.png')))
-        else:
-            self.setWindowIcon(QIcon('assets/logo.png'))
-        
-        self.initUI()
-        self.file_path = None
-        self.save_path = None
-        self.geocoder_thread = None
-        
-    def initUI(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        main_layout = QVBoxLayout()
-        main_widget.setLayout(main_layout)
-        
-        self.load_styles()
-        
-        # Header with logo and title
-        header = QHBoxLayout()
-        logo = QLabel()
-        if hasattr(sys, '_MEIPASS'):
-            pixmap = QPixmap(os.path.join(sys._MEIPASS, 'assets', 'logo.png')))
-        else:
-            pixmap = QPixmap('assets/logo.png')
-        logo.setPixmap(pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        header.addWidget(logo)
-        
-        title = QLabel("Обработка страховых данных")
-        title.setObjectName("titleLabel")
-        header.addWidget(title)
-        header.addStretch()
-        main_layout.addLayout(header)
-        
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setObjectName("separator")
-        main_layout.addWidget(separator)
-        
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(20, 15, 20, 15)
-        content_layout.setSpacing(15)
-        
-        # File selection
-        file_frame = self.create_section_frame("Файл Excel:", "Не выбран", "Выбрать файл", self.browse_file)
-        self.file_path_label = file_frame.findChild(QLabel, "valueLabel")
-        content_layout.addWidget(file_frame)
-        
-        # Save folder selection
-        save_frame = self.create_section_frame("Папка для сохранения:", "Не выбрана", "Выбрать папку", self.choose_save_path)
-        self.save_path_label = save_frame.findChild(QLabel, "valueLabel")
-        content_layout.addWidget(save_frame)
-        
-        # Options checkboxes
-        options_frame = QFrame()
-        options_frame.setObjectName("optionsFrame")
-        options_layout = QVBoxLayout(options_frame)
-        options_layout.setContentsMargins(15, 15, 15, 15)
-        
-        self.create_map_check = QCheckBox("Создать интерактивную карту")
-        self.create_map_check.setChecked(True)
-        self.create_map_check.stateChanged.connect(self.toggle_geocode)
-        options_layout.addWidget(self.create_map_check)
-        
-        self.geocode_check = QCheckBox("Геокодировать адреса (Nominatim)")
-        self.geocode_check.setChecked(True)
-        options_layout.addWidget(self.geocode_check)
-        
-        content_layout.addWidget(options_frame)
-        
-        # Progress indicators
-        self.progress_label = QLabel("Готов к работе")
-        self.progress_label.setObjectName("progressLabel")
-        content_layout.addWidget(self.progress_label)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setObjectName("progressBar")
-        content_layout.addWidget(self.progress_bar)
-        
-        # Process button
-        self.process_btn = StyledButton("Обработать данные")
-        self.process_btn.setObjectName("processButton")
-        self.process_btn.clicked.connect(self.process_data)
-        self.process_btn.setEnabled(False)
-        content_layout.addWidget(self.process_btn, stretch=1)
-        
-        main_layout.addLayout(content_layout)
-        
-        # Footer
-        footer = QLabel("Разработано: стажёр Мальцев Максим")
-        footer.setObjectName("footerLabel")
-        footer.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(footer)
-    
-    def toggle_geocode(self):
-        self.geocode_check.setEnabled(self.create_map_check.isChecked())
-    
-    def create_section_frame(self, title, default_value, button_text, callback):
-        frame = QFrame()
-        frame.setObjectName("sectionFrame")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-        
-        title_label = QLabel(title)
-        title_label.setObjectName("sectionTitle")
-        layout.addWidget(title_label)
-        
-        value_label = QLabel(default_value)
-        value_label.setObjectName("valueLabel")
-        value_label.setWordWrap(True)
-        layout.addWidget(value_label)
-        
-        btn = StyledButton(button_text)
-        btn.clicked.connect(callback)
-        layout.addWidget(btn)
-        
-        return frame
-    
-    def load_styles(self):
-        style_file = QFile("style.qss")
-        if style_file.open(QFile.ReadOnly | QFile.Text):
-            stream = QTextStream(style_file)
-            self.setStyleSheet(stream.readAll())
-    
-    def browse_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Выберите файл Excel", "", "Excel Files (*.xlsx *.xls)"
-        )
-        
-        if file_path:
-            self.file_path = file_path
-            self.file_path_label.setText(os.path.basename(file_path))
-            self.file_path_label.setToolTip(file_path)
-            self.check_ready()
-    
-    def choose_save_path(self):
-        save_path = QFileDialog.getExistingDirectory(self, "Выберите папку для сохранения")
-        
-        if save_path:
-            self.save_path = save_path
-            self.save_path_label.setText(os.path.basename(save_path))
-            self.save_path_label.setToolTip(save_path)
-            self.check_ready()
-    
-    def check_ready(self):
-        self.process_btn.setEnabled(bool(self.file_path and self.save_path))
-    
-    def normalize_address(self, address):
-        """Улучшенная нормализация адресов"""
-        if not isinstance(address, str):
-            return address
-            
-        patterns = [
-            # Квартиры и помещения
-            r',\s*(?:кв\.?\s*\d+[а-яa-z]?(?:\/\d+[а-яa-z]?)?|квартир?а\s*\d+[а-яa-z]?|'
-            r'пом\.?\s*\d+[а-яa-z]?|помещ(ение)?\.?\s*\d+[а-яa-z]?)(?:\s*,?\s*(?:ком\.?|комнат[аы]?)\s*\d+[а-яa-z]?)?\b',
-            # Офисы
-            r',\s*(?:оф\.?\s*\d+[а-яa-z]?|офис\s*\d+[а-яa-z]?)\b',
-            # Литеры
-            r',\s*литер[аы]?\s*[А-Яа-яA-Za-z]\b'
-        ]
-        
-        for pattern in patterns:
-            address = re.sub(pattern, '', address, flags=re.IGNORECASE)
-            
-        # Удаление двойных запятых и пробелов
-        address = re.sub(r',\s*,', ',', address)
-        address = re.sub(r'\s{2,}', ' ', address)
-        return address.strip(' ,')
-    
-    def create_folium_map(self, df):
-        """Создание интерактивной карты с кружками"""
-        if df.empty or not all(col in df.columns for col in ['lat', 'lon']):
+        if df_with_coords.empty:
+            logging.warning("No addresses with coordinates to plot")
             return None
         
-        # Фильтруем только адреса с координатами
-        df = df.dropna(subset=['lat', 'lon'])
-        if df.empty:
-            return None
+        # Создаем базовую карту с центром на первом адресе
+        first_location = df_with_coords.iloc[0]
+        m = folium.Map(location=[first_location['lat'], first_location['lon']], zoom_start=12)
         
-        # Создаем карту с центром на первом адресе
-        first_loc = df.iloc[0]
-        m = folium.Map(location=[first_loc['lat'], first_loc['lon']], zoom_start=12)
+        # Создаем кластер маркеров для лучшей производительности
+        marker_cluster = MarkerCluster().add_to(m)
         
-        # Определяем цвет круга в зависимости от суммы
+        # Определяем цвет маркера в зависимости от суммы
         def get_color(total):
-            if total > 7_000_000_000:
-                return '#FF0000'  # Красный
-            elif total > 6_000_000_000:
-                return '#FF4500'  # Оранжево-красный
-            elif total > 5_000_000_000:
-                return '#FF8C00'  # Темно-оранжевый
-            elif total > 2_000_000_000:
-                return '#FFA500'  # Оранжевый
-            elif total > 500_000_000:
-                return '#FFD700'  # Золотой
-            elif total > 300_000_000:
-                return '#FFFF00'  # Желтый
-            elif total > 100_000_000:
-                return '#ADFF2F'  # Зелено-желтый
+            if total < THRESHOLD_100M:
+                return 'green'
+            elif THRESHOLD_100M <= total < THRESHOLD_500M:
+                return 'orange'
+            elif THRESHOLD_500M <= total < THRESHOLD_2B:
+                return 'yellow'
             else:
-                return '#32CD32'  # Лаймовый
+                return 'red'
         
-        # Добавляем круги на карту
-        for _, row in df.iterrows():
-            folium.CircleMarker(
+        # Добавляем маркеры для каждого адреса
+        for _, row in df_with_coords.iterrows():
+            popup_text = f"Адрес: {row['address']}<br>Сумма: {row['total_premium']:,.2f} руб."
+            if row['total_premium'] > THRESHOLD_2B:
+                popup_text += "<br>Свыше 2 млрд"
+            elif row['total_premium'] > THRESHOLD_500M:
+                popup_text += "<br>Свыше 500 млн"
+            elif row['total_premium'] > THRESHOLD_100M:
+                popup_text += "<br>Свыше 100 млн"
+            folium.Marker(
                 location=[row['lat'], row['lon']],
-                radius=8 + (row['Сумма кумуляции'] / 100_000_000) ** 0.3,  # Динамический радиус
-                popup=f"Адрес: {row['Адрес']}<br>Сумма: {row['Сумма кумуляции']:,.2f} руб.",
-                color=get_color(row['Сумма кумуляции']),
-                fill=True,
-                fill_color=get_color(row['Сумма кумуляции'])
-            ).add_to(m)
+                popup=popup_text,
+                icon=folium.Icon(color=get_color(row['total_premium']))
+            ).add_to(marker_cluster)
         
-        return m
-    
+        # Сохраняем карту в HTML файл
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        map_file = os.path.join(output_folder, f"insurance_map_{timestamp}.html")
+        m.save(map_file)
+        
+        return map_file
+    except Exception as e:
+        logging.error(f"Error creating map: {e}")
+        return None
+
+class InsuranceApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Обработка страховых данных")
+        self.root.geometry("800x600")
+        
+        self.input_file = tk.StringVar()
+        self.output_folder = tk.StringVar()
+        self.progress = tk.DoubleVar()
+        self.status = tk.StringVar(value="Готов к работе")
+        self.create_map_var = tk.BooleanVar(value=True)
+        self.geocode_var = tk.BooleanVar(value=True)
+        
+        self._setup_ui()
+        logging.info("Приложение инициализируется")
+
+    def _setup_ui(self):
+        """Setup UI components"""
+        self._set_icon()
+        style = ttk.Style()
+        style.configure("TButton", padding=6, font=('Arial', 10))
+        style.configure("TLabel", padding=6, font=('Arial', 10))
+
+        # Logo
+        logo_frame = ttk.Frame(self.root)
+        logo_frame.pack(pady=5)
+        try:
+            logo_path = resource_path("assets/app_logo.png")
+            img = Image.open(logo_path).resize((150, 150), Image.Resampling.LANCZOS)
+            self.logo_img = ImageTk.PhotoImage(img)
+            ttk.Label(logo_frame, image=self.logo_img).pack()
+        except Exception as e:
+            logging.error(f"Failed to load logo: {e}")
+            ttk.Label(logo_frame, text="Логотип отсутствует").pack()
+
+        # Main frame
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        # File input
+        ttk.Label(main_frame, text="Файл Excel:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.input_file, width=50).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(main_frame, text="Обзор", command=self.browse_file).grid(row=0, column=2, padx=5, pady=5)
+
+        # Output folder
+        ttk.Label(main_frame, text="Папка для сохранения:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.output_folder, width=50).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(main_frame, text="Обзор", command=self.browse_folder).grid(row=1, column=2, padx=5, pady=5)
+
+        # Map checkbox
+        ttk.Checkbutton(main_frame, text="Создать интерактивную карту", variable=self.create_map_var,
+                       command=self.toggle_geocode).grid(row=2, column=0, columnspan=3, pady=5, sticky=tk.W)
+        
+        # Geocode checkbox (only enabled when map is enabled)
+        self.geocode_check = ttk.Checkbutton(main_frame, text="Геокодировать адреса (Nominatim)", 
+                                           variable=self.geocode_var, state=tk.NORMAL)
+        self.geocode_check.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
+
+        # Progress bar
+        ttk.Label(main_frame, text="Прогресс:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Progressbar(main_frame, variable=self.progress, maximum=100, length=400).grid(row=4, column=1, columnspan=2, padx=5, pady=5)
+
+        # Status
+        ttk.Label(main_frame, textvariable=self.status).grid(row=5, column=0, columnspan=3, pady=5)
+
+        # Process button
+        ttk.Button(main_frame, text="Обработать", command=self.process_data).grid(row=6, column=0, columnspan=3, pady=10)
+
+        # Developer label
+        ttk.Label(self.root, text="Разработано: стажёр Мальцев Максим", font=('Arial', 12)).pack(side=tk.BOTTOM, pady=5)
+
+    def toggle_geocode(self):
+        """Enable/disable geocode checkbox based on map checkbox"""
+        if self.create_map_var.get():
+            self.geocode_check.config(state=tk.NORMAL)
+        else:
+            self.geocode_check.config(state=tk.DISABLED)
+
+    def _set_icon(self):
+        """Set application icon"""
+        try:
+            icon_path = resource_path("assets/app_icon.ico")
+            self.root.iconbitmap(icon_path)
+        except Exception as e:
+            logging.error(f"Failed to set icon: {e}")
+
+    def browse_file(self):
+        """Select input Excel file"""
+        file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xls *.xlsx"), ("All files", "*.*")])
+        if file_path:
+            self.input_file.set(file_path)
+            if not self.output_folder.get():
+                self.output_folder.set(os.path.dirname(file_path))
+            logging.info(f"Selected input file: {file_path}")
+
+    def browse_folder(self):
+        """Select output folder"""
+        folder_path = filedialog.askdirectory()
+        if folder_path:
+            self.output_folder.set(folder_path)
+            logging.info(f"Selected output folder: {folder_path}")
+
+    def update_progress(self, value):
+        """Update progress bar from geocoding thread"""
+        self.progress.set(value)
+        self.root.update_idletasks()
+
     def process_data(self):
+        """Process Excel data and save results"""
+        input_file = self.input_file.get()
+        output_folder = self.output_folder.get()
+
+        if not input_file or not os.path.exists(input_file):
+            messagebox.showerror("Ошибка", "Выберите действительный файл Excel")
+            logging.error("Invalid or missing input file")
+            return
+
+        if not output_folder or not os.path.isdir(output_folder):
+            messagebox.showerror("Ошибка", "Выберите действительную папку для сохранения")
+            logging.error("Invalid or missing output folder")
+            return
+
         try:
-            self.progress_label.setText("Прогресс: Чтение файла...")
-            self.progress_bar.setValue(5)
-            QApplication.processEvents()
-            
-            # Чтение файла Excel
-            df = pd.read_excel(self.file_path)
-            
-            # Проверка необходимых столбцов
-            required_columns = ['object', 'money', 'date_end', 'adress']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            
-            if missing_columns:
-                raise ValueError(f"Отсутствуют необходимые столбцы: {', '.join(missing_columns)}")
-            
-            self.progress_label.setText("Прогресс: Обработка данных...")
-            self.progress_bar.setValue(20)
-            QApplication.processEvents()
-            
-            # Фильтрация строк
-            mask1 = ~df['object'].str.contains(
-                'Гражданская ответсвенность|Гражданская ответственность', 
-                case=False, 
-                na=False
-            )
-            mask2 = pd.to_datetime(df['date_end'], dayfirst=True) >= datetime(2025, 5, 31)
-            filtered_df = df[mask1 & mask2].copy()
-            
-            # Нормализация адресов
-            filtered_df['normalized_adress'] = filtered_df['adress'].apply(self.normalize_address)
-            
-            # Сохранение отфильтрованных данных
-            filtered_data_path = os.path.join(self.save_path, 'filtered_data.xlsx')
-            filtered_df.to_excel(filtered_data_path, index=False)
-            
-            self.progress_label.setText("Прогресс: Расчет кумуляции...")
-            self.progress_bar.setValue(40)
-            QApplication.processEvents()
-            
-            # Расчет кумуляции по нормализованным адресам
-            result_df = filtered_df.groupby('normalized_adress')['money'].sum().reset_index()
-            result_df.columns = ['Адрес', 'Сумма кумуляции']
-            
-            # Разделение по суммам
-            thresholds = [
-                ('>100M', 100_000_000),
-                ('>300M', 300_000_000),
-                ('>500M', 500_000_000),
-                ('>2B', 2_000_000_000),
-                ('>5B', 5_000_000_000),
-                ('>6B', 6_000_000_000),
-                ('>7B', 7_000_000_000)
-            ]
-            
-            # Геокодирование, если нужно
-            if self.create_map_check.isChecked() and self.geocode_check.isChecked():
-                self.progress_label.setText("Прогресс: Геокодирование адресов...")
-                self.progress_bar.setValue(50)
-                QApplication.processEvents()
+            self.status.set("Чтение файла...")
+            self.progress.set(10)
+            df = pd.read_excel(input_file, engine='openpyxl')
+            logging.info("Excel file read successfully")
+
+            self.status.set("Очистка текста...")
+            self.progress.set(20)
+            df['object'] = df['object'].apply(clean_text)
+
+            self.status.set("Очистка адресов...")
+            self.progress.set(30)
+            df['clean_address'] = df['address'].apply(clean_address)
+
+            self.status.set("Фильтрация данных...")
+            self.progress.set(40)
+            # df_filtered = df[~df['object'].str.lower().str.strip().apply(lambda x: bool(REGEX.search(x)) if pd.notna(x) else False)]
+            df_filtered = df  # Пропускаем фильтрацию по гражданской ответственности
+
+            df_filtered['date_end'] = pd.to_datetime(df_filtered['date_end'], dayfirst=True, errors='coerce')
+            filter_date = pd.to_datetime(datetime.now().date())
+            df_filtered = df_filtered[(df_filtered['date_end'] >= filter_date) & df_filtered['date_end'].notna()]
+
+            self.status.set("Подсчет сумм...")
+            self.progress.set(60)
+            address_sums = df_filtered.groupby('clean_address')['money'].sum().reset_index(name='total_premium')
+            address_sums = address_sums.rename(columns={'clean_address': 'address'})
+
+            # Разделение данных по пороговым суммам
+            sums_above_100M = address_sums[address_sums['total_premium'] > THRESHOLD_100M]
+            sums_above_500M = address_sums[address_sums['total_premium'] > THRESHOLD_500M]
+            sums_above_2B = address_sums[address_sums['total_premium'] > THRESHOLD_2B]
+
+            # Логирование количества адресов по пороговым суммам
+            logging.info(f"Addresses above 100M: {len(sums_above_100M)}")
+            logging.info(f"Addresses above 500M: {len(sums_above_500M)}")
+            logging.info(f"Addresses above 2B: {len(sums_above_2B)}")
+
+            # Геокодирование адресов, если нужно
+            if self.create_map_var.get() and self.geocode_var.get():
+                self.status.set("Геокодирование адресов... (это может занять время)")
+                self.root.update_idletasks()
                 
-                self.geocoder_thread = GeocoderThread(result_df['Адрес'].tolist())
-                self.geocoder_thread.progress_signal.connect(self.progress_bar.setValue)
+                unique_addresses = address_sums['address'].unique()
+                coordinates = geocode_addresses(unique_addresses, self.update_progress)
                 
-                def on_geocoding_finished(coords):
-                    result_df['lat'] = [c[0] for c in coords]
-                    result_df['lon'] = [c[1] for c in coords]
-                    self.finalize_processing(result_df, thresholds)
+                # Создаем словарь адрес -> координаты
+                address_coords = {addr: coords for addr, coords in zip(unique_addresses, coordinates)}
                 
-                self.geocoder_thread.finished_signal.connect(on_geocoding_finished)
-                self.geocoder_thread.start()
-                return
-            else:
-                self.finalize_processing(result_df, thresholds)
-                
+                # Добавляем координаты в DataFrame
+                address_sums['lat'] = address_sums['address'].map(lambda x: address_coords.get(x, (None, None))[0])
+                address_sums['lon'] = address_sums['address'].map(lambda x: address_coords.get(x, (None, None))[1])
+
+            self.status.set("Сохранение результатов...")
+            self.progress.set(90)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = os.path.join(output_folder, f"insurance_results_{timestamp}.xlsx")
+            
+            with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+                df_filtered.to_excel(writer, sheet_name='filtered_data', index=False)
+                address_sums.to_excel(writer, sheet_name='address_totals', index=False)
+                sums_above_100M.to_excel(writer, sheet_name='totals_above_100M', index=False)
+                sums_above_500M.to_excel(writer, sheet_name='totals_above_500M', index=False)
+                sums_above_2B.to_excel(writer, sheet_name='totals_above_2B', index=False)
+            
+            # Создание карты, если выбрано
+            if self.create_map_var.get():
+                self.status.set("Создание карты...")
+                map_file = create_map(address_sums, output_folder)
+                if map_file:
+                    try:
+                        webbrowser.open(f"file://{map_file}")
+                    except webbrowser.Error as e:
+                        messagebox.showerror("Ошибка", f"Не удалось открыть карту: {str(e)}")
+                        logging.error(f"Failed to open map: {str(e)}")
+            
+            self.progress.set(100)
+            self.status.set("Готово!")
+            messagebox.showinfo("Успешно", f"Результаты сохранены в:\n{output_file}")
+            logging.info(f"Results saved to {output_file}")
+
         except Exception as e:
-            self.progress_label.setText("Прогресс: Ошибка")
-            self.progress_bar.setValue(0)
-            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка:\n{str(e)}")
-    
-    def finalize_processing(self, result_df, thresholds):
-        try:
-            self.progress_label.setText("Прогресс: Сохранение результатов...")
-            self.progress_bar.setValue(80)
-            QApplication.processEvents()
-            
-            # Сохранение результатов
-            output_path = os.path.join(self.save_path, 'результаты_обработки.xlsx')
-            
-            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                result_df.to_excel(writer, sheet_name='Все адреса', index=False)
-                
-                for name, threshold in thresholds:
-                    sheet_df = result_df[result_df['Сумма кумуляции'] > threshold]
-                    sheet_df.to_excel(writer, sheet_name=name, index=False)
-            
-            # Создание карты, если нужно
-            if self.create_map_check.isChecked():
-                self.progress_label.setText("Прогресс: Генерация карты...")
-                self.progress_bar.setValue(90)
-                QApplication.processEvents()
-                
-                map_html_path = os.path.join(self.save_path, 'карта_кумуляции.html')
-                folium_map = self.create_folium_map(result_df)
-                
-                if folium_map:
-                    folium_map.save(map_html_path)
-                    self.progress_label.setText(f"Готово! Карта сохранена в {map_html_path}")
-                else:
-                    self.progress_label.setText("Готово! Не удалось создать карту (нет координат)")
-            
-            self.progress_bar.setValue(100)
-            
-            QMessageBox.information(
-                self, 
-                "Успех", 
-                f"Обработка завершена успешно!\n\n"
-                f"Результаты сохранены в:\n{output_path}"
-            )
-            
-        except Exception as e:
-            self.progress_label.setText("Прогресс: Ошибка")
-            self.progress_bar.setValue(0)
-            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при сохранении:\n{str(e)}")
-        
-        finally:
-            self.progress_bar.setValue(0)
-            self.progress_label.setText("Готов к новой обработке")
+            messagebox.showerror("Ошибка", f"Ошибка обработки:\n{str(e)}")
+            self.status.set("Ошибка")
+            self.progress.set(0)
+            logging.error(f"Processing error: {e}")
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    font = QFont("Segoe UI", 12)
-    app.setFont(font)
-    window = InsuranceDataProcessor()
-    window.show()
-    sys.exit(app.exec_())
+    root = tk.Tk()
+    app = InsuranceApp(root)
+    root.mainloop()
