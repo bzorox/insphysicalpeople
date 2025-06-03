@@ -8,7 +8,6 @@ import logging
 from datetime import datetime
 from PIL import Image, ImageTk
 import webbrowser
-import tempfile
 import folium
 from folium.plugins import MarkerCluster
 from geopy.geocoders import Nominatim
@@ -52,7 +51,7 @@ def clean_text(text):
     """Очистка полей object от ФИО"""
     text = str(text)
     text = re.sub(r"\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]\b|\b[А-ЯЁ][а-яё]+-\b|\b[А-ЯЁ][а-яё]+s\b|\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s\b", '', text)
-    text = re.sub(r",\d{2}-\d{2}-\д{2},", '', text)
+    text = re.sub(r",\d{2}-\d{2}-\d{2},", '', text)
     return text.strip()
 
 def clean_address(address):
@@ -112,20 +111,27 @@ def create_map(dataframe, output_folder):
         
         # Определяем цвет маркера в зависимости от суммы
         def get_color(total):
-            if total < 100_000_000:
+            if total < THRESHOLD_100M:
                 return 'green'
-            elif 100_000_000 <= total < 500_000_000:
+            elif THRESHOLD_100M <= total < THRESHOLD_500M:
                 return 'orange'
-            elif 500_000_000 <= total < 2_000_000_000:
+            elif THRESHOLD_500M <= total < THRESHOLD_2B:
                 return 'yellow'
             else:
                 return 'red'
         
         # Добавляем маркеры для каждого адреса
         for _, row in df_with_coords.iterrows():
+            popup_text = f"Адрес: {row['address']}<br>Сумма: {row['total_premium']:,.2f} руб."
+            if row['total_premium'] > THRESHOLD_2B:
+                popup_text += "<br>Свыше 2 млрд"
+            elif row['total_premium'] > THRESHOLD_500M:
+                popup_text += "<br>Свыше 500 млн"
+            elif row['total_premium'] > THRESHOLD_100M:
+                popup_text += "<br>Свыше 100 млн"
             folium.Marker(
                 location=[row['lat'], row['lon']],
-                popup=f"Адрес: {row['address']}<br>Сумма: {row['total_premium']:,.2f} руб.",
+                popup=popup_text,
                 icon=folium.Icon(color=get_color(row['total_premium']))
             ).add_to(marker_cluster)
         
@@ -198,7 +204,7 @@ class InsuranceApp:
         self.geocode_check.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
 
         # Progress bar
-        ttk.Label(main_frame, text="Прогресс:").grid(rowmetal=4, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Прогресс:").grid(row=4, column=0, sticky=tk.W, pady=5)
         ttk.Progressbar(main_frame, variable=self.progress, maximum=100, length=400).grid(row=4, column=1, columnspan=2, padx=5, pady=5)
 
         # Status
@@ -294,6 +300,11 @@ class InsuranceApp:
             sums_above_500M = address_sums[address_sums['total_premium'] > THRESHOLD_500M]
             sums_above_2B = address_sums[address_sums['total_premium'] > THRESHOLD_2B]
 
+            # Логирование количества адресов по пороговым суммам
+            logging.info(f"Addresses above 100M: {len(sums_above_100M)}")
+            logging.info(f"Addresses above 500M: {len(sums_above_500M)}")
+            logging.info(f"Addresses above 2B: {len(sums_above_2B)}")
+
             # Геокодирование адресов, если нужно
             if self.create_map_var.get() and self.geocode_var.get():
                 self.status.set("Геокодирование адресов... (это может занять время)")
@@ -326,11 +337,15 @@ class InsuranceApp:
                 self.status.set("Создание карты...")
                 map_file = create_map(address_sums, output_folder)
                 if map_file:
-                    webbrowser.open(f"file://{map_file}")
+                    try:
+                        webbrowser.open(f"file://{map_file}")
+                    except webbrowser.Error as e:
+                        messagebox.showerror("Ошибка", f"Не удалось открыть карту: {str(e)}")
+                        logging.error(f"Failed to open map: {str(e)}")
             
             self.progress.set(100)
             self.status.set("Готово!")
-            messagebox.showinfo("Успешно", f"Результаты сохранены в:\n{output_folder}")
+            messagebox.showinfo("Успешно", f"Результаты сохранены в:\n{output_file}")
             logging.info(f"Results saved to {output_file}")
 
         except Exception as e:
